@@ -1,5 +1,3 @@
-import spectacularAI
-import time
 import cv2
 
 import torch
@@ -8,7 +6,6 @@ import numpy as np
 import dsacstar
 
 import argparse
-import math
 import os
 import re
 
@@ -23,7 +20,6 @@ from datetime import datetime
 host, port = "127.0.0.1", 25001
 
 def parse_args():
-    import argparse
     p = argparse.ArgumentParser(
         description='Test a trained network on a specific scene.',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -132,7 +128,6 @@ def convert_right_to_left_handed(matrix):
     converted_matrix = np.dot(flip_y, matrix)
     return converted_matrix
 
-
 def process_frame():
     global lock
     global frame_number
@@ -141,45 +136,45 @@ def process_frame():
     file_path = os.path.join(directory, filename)
     rgb_frame = cv2.imread(file_path)
 
-    # print(rgb_frame.shape)
-    # rgb_frame = cv2.flip(rgb_frame, 0)
-
-    #curr_dt = datetime.now()
-    #timestamp = int(round(curr_dt.timestamp()))
-    #img_name = "rgb/" + str(timestamp) + ".png"
-    #cv2.imwrite(img_name, rgb_frame)
-
-    # cv2.imshow("left", rgb_frame)
-
     pose = inference(rgb_frame, transform, network)
     pose = convert_right_to_left_handed(pose)
-    # print(pose)
-    #time.sleep(0.8)
-    # Save the pose data to the file
-    '''with open("poses/" + str(timestamp) + ".txt", 'w') as pose_file:
-        for row in pose:
-            pose_file.write(' '.join(map(str, row.numpy())) + '\n')'''
-    
-    # print(frame_number)
-    # print(filename)
 
-    msg = 'image:' + file_path
-    print("⏩ %s" % msg)
-    sock.sendall(msg.encode("utf-8"))
-    sock.recv(1024).decode("utf-8")
-
+    # send pose over socket
     frame_number += 1
     msg = ''
     for t in pose:
         for v in t:
             msg += ',' + str(round(float(v), 4))
-    msg = 'pose:' + msg[1:]
+    msg = msg[1:]
+   
+    # send pose header
+    poseHeader = 'pose:' + str(len(msg))
+    print("⏩ %s" % poseHeader)
+    sock.send(poseHeader.encode("utf-8"))
+    sizeConfirmation = sock.recv(1024)
+    print("✅ %s" % sizeConfirmation.decode('utf-8'))
+   
+    # send pose message
     print("⏩ %s" % msg)
     sock.sendall(msg.encode("utf-8"))
     response = sock.recv(1024).decode("utf-8")
-    print("✅")
-    # lock.release()
+    print("✅ %s" % response)
 
+    # image path message
+    msg = file_path
+
+    # send image path header
+    imgHeader = 'imgpath:' + str(len(msg))
+    print("⏩ %s" % imgHeader)
+    sock.send(imgHeader.encode("utf-8"))
+    sizeConfirmation = sock.recv(1024)
+    print("✅ %s" % sizeConfirmation.decode('utf-8'))
+
+    # send image path message
+    print("⏩ %s" % msg)
+    sock.sendall(msg.encode("utf-8"))
+    response = sock.recv(1024).decode("utf-8")
+    print("✅ %s" % response)
 
 def main_loop(args):
     global img_queue
@@ -197,7 +192,8 @@ def main_loop(args):
     frames = {}
     #frame_number = 0
 
-    network_name = "model_e2e_550_final_epoch_237.net" #"model_e2e_200_epoch_200.net" #"model_e2e_150_epoch_150.net"
+    # network_name = "model_e2e_550_final_epoch_237.net"
+    network_name = "model_e2e_150_epoch_150.net"
     tiny = True
 
     # load network
@@ -217,10 +213,6 @@ def main_loop(args):
     ])
     with torch.no_grad():
         while True:
-            # if not lock.locked():
-            #     lock.acquire(True)
-            #     p1 = threading.Thread(target=process_frame)
-            #     p1.start()
             process_frame()
 
 

@@ -18,9 +18,13 @@ import atexit
 import socket
 import threading
 from datetime import datetime
+import struct
 
-# host, port = "127.0.0.1", 25001
-host, port = "192.168.137.1", 25001
+text_port = 25001
+image_port = 25001
+
+host = "127.0.0.1"
+#host = "192.168.137.1"
 
 def parse_args():
     import argparse
@@ -62,17 +66,11 @@ def make_pipelines():
     vio_pipeline = spectacularAI.depthai.Pipeline(pipeline, config)
 
     # Define sources and outputs
-    #monoLeft = pipeline.create(depthai.node.MonoCamera)
     rectLeft = vio_pipeline.stereo.rectifiedLeft
     xoutLeft = pipeline.create(depthai.node.XLinkOut)
     xoutLeft.setStreamName("cam_out")
     
-    # Properties
-    #monoLeft.setCamera("left")
-    #monoLeft.setResolution(depthai.MonoCameraProperties.SensorResolution.THE_800_P)
-    
     # Linking
-    #monoLeft.out.link(xoutLeft.input)
     rectLeft.link(xoutLeft.input)
 
     return pipeline, vio_pipeline
@@ -161,8 +159,7 @@ def convert_right_to_left_handed(matrix):
     return converted_matrix
 
 def process_frame():
-    global lock
-    global frame_number
+    global lock, frame_number
 
     img = img_queue.get()
     rgb_frame = img.getCvFrame()
@@ -171,43 +168,57 @@ def process_frame():
     
     curr_dt = datetime.now()
     timestamp = int(round(curr_dt.timestamp()))
+
+    # write image to disk
     #img_name = "rgb/" + str(timestamp) + ".png"
     #cv2.imwrite(img_name, rgb_frame)
 
-    #cv2.imshow("left", rgb_frame)
+    # infer pose    
     pose = inference(rgb_frame, transform, network)
     pose = convert_right_to_left_handed(pose)
-    #print(pose)
+
     # Save the pose data to the file
     '''with open("poses/" +  str(timestamp) + ".txt", 'w') as pose_file:
         for row in pose:
             pose_file.write(' '.join(map(str, row.numpy())) + '\n')'''
+
+    # send pose over socket
     frame_number += 1
     msg = ''
     for t in pose:
         for v in t:
             msg += ',' + str(round(float(v), 4))
-    msg = 'pose:' + msg[1:]
+    msg = msg[1:]
+   
+    # send pose header
+    poseHeader = 'pose:' + str(len(msg))
+    print("⏩ %s" % poseHeader)
+    sock.send(poseHeader.encode("utf-8"))
+    sizeConfirmation = sock.recv(1024)
+    print("✅ %s" % sizeConfirmation.decode('utf-8'))
+   
     print("⏩ %s" % msg)
     sock.sendall(msg.encode("utf-8"))
     response = sock.recv(1024).decode("utf-8")
     print("✅ %s" % response)
+
+    # convert image to png and send over the socket
+    byteString = cv2.imencode('.jpg', rgb_frame)[1].tobytes()
+    imgHeader = 'imgbin:' + str(len(byteString))
+    print("⏩ %s" % imgHeader)
+    sock.send(imgHeader.encode("utf-8"))
+    sizeConfirmation = sock.recv(1024)
+    totalSent = 0
+    while totalSent < len(byteString):
+        totalSent += sock.send(byteString[totalSent:])
+    print("✅ %s" % sizeConfirmation.decode('utf-8'))
+
     lock.release()
 
 def main_loop(args, device):
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    print("⏳ Connecting to %s:%s" % (host, port))
-    sock.connect((host, port))
-    print("✅ Connected to host")
-    global img_queue
-    global transform
-    global network
-    global lock
+    global sock, text_sock, img_queue, transform, network, lock
 
     img_queue = device.getOutputQueue(name="cam_out", maxSize=4, blocking=False)
-
-    frames = {}
-    frame_number = 1
 
     network_name = "model_e2e_150_epoch_150.net"
     tiny = True
@@ -248,13 +259,13 @@ atexit.register(exit_handler)
 if __name__ == '__main__':
     args = parse_args()
 
-    # SOCK_STREAM means TCP socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    print("⏳ Connecting to %s:%s" % (host, port))
-    sock.connect((host, port))
+    
+    print("⏳ Connecting to %s:%s" % (host, image_port))
+    sock.connect((host, image_port))
     print("✅ Connected to host")
+    
     print("⏳ Connecting to OAK-D device")
-
     pipeline, vio_pipeline = make_pipelines()
     print("✅ Connected to OAK-D device")
 
